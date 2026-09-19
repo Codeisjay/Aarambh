@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   getSettings,
   updateInterviewSettings,
+  updateAiThresholds,
   updateMediaSettings,
   updateNotificationSettings,
   updateDisplaySettings,
@@ -19,6 +20,7 @@ router.get('/', getSettings);
 
 // Update different setting categories
 router.put('/interview', updateInterviewSettings);
+router.put('/ai-thresholds', updateAiThresholds);
 router.put('/media', updateMediaSettings);
 router.put('/notifications', updateNotificationSettings);
 router.put('/display', updateDisplaySettings);

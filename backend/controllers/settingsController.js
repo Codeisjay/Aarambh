@@ -70,6 +70,40 @@ exports.updateInterviewSettings = async (req, res) => {
   }
 };
 
+exports.updateAiThresholds = async (req, res) => {
+  try {
+    const thresholds = req.body || {};
+    const updateData = { aiThresholds: {} };
+
+    if (thresholds.eyeContactThreshold !== undefined) updateData.aiThresholds.eyeContactThreshold = Number(thresholds.eyeContactThreshold);
+    if (thresholds.fillerThreshold !== undefined) updateData.aiThresholds.fillerThreshold = Number(thresholds.fillerThreshold);
+    if (thresholds.wpmThreshold !== undefined) updateData.aiThresholds.wpmThreshold = Number(thresholds.wpmThreshold);
+    if (thresholds.pauseThreshold !== undefined) updateData.aiThresholds.pauseThreshold = Number(thresholds.pauseThreshold);
+    if (thresholds.blinkThreshold !== undefined) updateData.aiThresholds.blinkThreshold = Number(thresholds.blinkThreshold);
+
+    const settings = await Settings.findOneAndUpdate(
+      { userId: req.user.id },
+      { ...updateData },
+      { new: true, upsert: true }
+    );
+
+    await AuditLog.create({
+      userId: req.user.id,
+      action: 'settings_update',
+      resourceType: 'Settings',
+      status: 'success',
+      details: { settingType: 'ai-thresholds', changes: updateData.aiThresholds },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    res.status(200).json({ success: true, message: 'AI thresholds updated', data: settings });
+  } catch (error) {
+    console.error('Update AI Thresholds Error:', error);
+    res.status(500).json({ success: false, message: 'Error updating AI thresholds' });
+  }
+};
+
 // @desc    Update media settings
 // @route   PUT /api/settings/media
 // @access  Private

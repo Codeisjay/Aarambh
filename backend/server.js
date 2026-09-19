@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
+const { initializeSocket } = require('./services/socketService');
 
 // Import routes
 const authRoutes = require('./routes/authRoutes');
@@ -12,6 +13,7 @@ const sessionRoutes = require('./routes/sessionRoutes');
 const metricsRoutes = require('./routes/metricsRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const liveMetricsRoutes = require('./routes/liveMetricsRoutes');
 
 const app = express();
 
@@ -48,6 +50,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/metrics', metricsRoutes);
+app.use('/api/live', liveMetricsRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 
@@ -65,6 +68,7 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 const server = app.listen(PORT, () => {
+  initializeSocket(server);
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });

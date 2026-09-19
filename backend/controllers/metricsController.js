@@ -171,10 +171,30 @@ exports.updateConfidenceMetrics = async (req, res) => {
     }
 
     let confidenceMetrics = await ConfidenceMetrics.findOne({ sessionId });
+    const timestamp = Date.now();
+    const confidenceFeedback = metrics.recommendations?.length
+      ? metrics.recommendations.join(' ')
+      : `Confidence ${metrics.overallConfidenceScore ?? 0}, eye contact ${metrics.eyeContact ?? 0}, posture ${metrics.posture ?? 0}`;
+    const observation = {
+      timestamp,
+      metric: 'confidence-snapshot',
+      value: Number(metrics.overallConfidenceScore) || 0,
+      feedback: confidenceFeedback,
+    };
+    const timelinePoint = {
+      timestamp,
+      eyeContact: Number(metrics.eyeContact) || 0,
+      posture: Number(metrics.posture) || 0,
+      gestures: Number(metrics.gestures) || 0,
+      nervousness: Number(metrics.nervousness) || 0,
+      engagement: Number(metrics.engagement) || 0,
+    };
 
     if (confidenceMetrics) {
       // Update existing metrics
       Object.assign(confidenceMetrics, metrics);
+      confidenceMetrics.insights.push(observation);
+      confidenceMetrics.metricsByTimestamp.push(timelinePoint);
       await confidenceMetrics.save();
     } else {
       // Create new metrics
@@ -182,12 +202,16 @@ exports.updateConfidenceMetrics = async (req, res) => {
         sessionId,
         userId: req.user.id,
         ...metrics,
+        insights: [observation],
+        metricsByTimestamp: [timelinePoint],
       });
 
       // Associate with session
       session.confidenceMetricsId = confidenceMetrics._id;
       await session.save();
     }
+
+    console.log(`[Metrics] Persisted confidence observation for ${sessionId}: insights=${confidenceMetrics.insights.length}, timeline=${confidenceMetrics.metricsByTimestamp.length}`);
 
     res.status(200).json({
       success: true,

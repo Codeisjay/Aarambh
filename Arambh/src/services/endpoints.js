@@ -1,6 +1,21 @@
 // API Service for all endpoints
 import api from './api';
 
+const AI_SERVICE_URL = import.meta.env.VITE_AI_SERVICE_URL || 'http://127.0.0.1:5100';
+
+export const aiAPI = {
+  transcribeAudio: async (audioBlob) => {
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'interview.webm');
+    const response = await fetch(`${AI_SERVICE_URL}/api/transcribe`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) throw new Error(`Whisper transcription failed (${response.status})`);
+    return response.json();
+  },
+};
+
 // ============= AUTH ENDPOINTS =============
 export const authAPI = {
   signup: (firstName, lastName, email, password, confirmPassword) =>
@@ -57,6 +72,9 @@ export const settingsAPI = {
   
   updateInterviewSettings: (settings) =>
     api.put('/settings/interview', settings),
+
+  updateAiThresholds: (thresholds) =>
+    api.put('/settings/ai-thresholds', thresholds),
   
   updateMediaSettings: (settings) =>
     api.put('/settings/media', settings),

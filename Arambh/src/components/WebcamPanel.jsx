@@ -5,7 +5,7 @@ import { useEffect } from 'react';
 
 const CV_MODULE_URL = import.meta.env.VITE_CV_MODULE_URL || 'http://localhost:5001';
 
-export default function WebcamPanel({ isEnabled = true, isSessionEnded = false, isPaused = false, isCvConnected = false }) {
+export default function WebcamPanel({ isEnabled = true, isSessionEnded = false, isPaused = false, isCvConnected = false, faceDetected = false }) {
   const { videoRef, isActive, error } = useCamera(isEnabled && !isSessionEnded);
 
   useEffect(() => {
@@ -59,6 +59,12 @@ export default function WebcamPanel({ isEnabled = true, isSessionEnded = false, 
           </div>
         )}
 
+        {isCvConnected && !faceDetected && !isSessionEnded && isEnabled && !isPaused && (
+          <div className="absolute inset-x-4 bottom-4 rounded-lg border border-yellow-600/70 bg-slate-950/80 px-3 py-2 text-center text-sm text-yellow-300">
+            Face not detected. Center your face in the frame.
+          </div>
+        )}
+
         {((!isActive && !isSessionEnded) || ((!isEnabled || isPaused) && !isSessionEnded)) && (
           <div className="flex flex-col items-center justify-center absolute inset-0 bg-gradient-to-br from-[#0b1220] to-[#101a30]">
             {!isEnabled || isPaused ? (
@@ -82,7 +88,7 @@ export default function WebcamPanel({ isEnabled = true, isSessionEnded = false, 
       <p className="text-slate-400 text-sm font-semibold">Live Webcam Feed</p>
 
       <BadgeGreen>
-        ● Behavioral Analysis {isSessionEnded ? 'Completed' : isEnabled && !isPaused ? isCvConnected ? 'Active' : 'Connecting' : 'Paused'}
+        ● Behavioral Analysis {isSessionEnded ? 'Completed' : isEnabled && !isPaused ? !isCvConnected ? 'Connecting' : faceDetected ? 'Active' : 'Face Not Detected' : 'Paused'}
       </BadgeGreen>
     </div>
   );

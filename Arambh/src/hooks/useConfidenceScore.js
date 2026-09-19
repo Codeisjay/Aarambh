@@ -11,6 +11,7 @@ export function useConfidenceScore(sessionId = null) {
     eye_contact_score: 0,
     blink_score: 0,
     head_stability_score: 0,
+    face_detected: false,
     warnings: []
   });
   
@@ -53,6 +54,7 @@ export function useConfidenceScore(sessionId = null) {
                 eye_contact_score: eyeContactScore,
                 blink_score: blinkScore,
                 head_stability_score: headStabilityScore,
+                face_detected: payload.face?.detected === true,
                 warnings: confidence.warnings || []
               });
 
@@ -71,6 +73,16 @@ export function useConfidenceScore(sessionId = null) {
                   console.warn('[CV Module] Could not persist metrics:', error.message);
                 });
               }
+            } else if (payload.success === false) {
+              setMetrics((previous) => ({
+                ...previous,
+                confidence_score: 0,
+                eye_contact_score: 0,
+                blink_score: 0,
+                head_stability_score: 0,
+                face_detected: false,
+                warnings: [payload.message || 'No face detected. Center your face in the camera.'],
+              }));
             }
           } catch (error) {
             console.error('[CV Module] Error parsing metrics:', error);
@@ -112,6 +124,7 @@ export function useConfidenceScore(sessionId = null) {
     blinkScore: metrics.blink_score,
     headStability: metrics.head_stability_score,
     overallConfidence: metrics.confidence_score,
+    faceDetected: metrics.face_detected,
     isConnected,
     connectionError,
     warnings: metrics.warnings

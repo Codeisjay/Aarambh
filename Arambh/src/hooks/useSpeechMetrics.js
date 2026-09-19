@@ -38,6 +38,8 @@ export function useSpeechMetrics(isEnabled = true) {
 
   const recognitionRef = useRef(null);
   const shouldListenRef = useRef(false);
+  const recognitionRunningRef = useRef(false);
+  const restartTimerRef = useRef(null);
 
   /*
    * ==========================================
@@ -49,6 +51,7 @@ export function useSpeechMetrics(isEnabled = true) {
    */
   const finalWordCountRef = useRef(0);
   const finalFillerCountRef = useRef(0);
+  const transcriptRef = useRef('');
 
   /*
    * ==========================================
@@ -231,11 +234,14 @@ export function useSpeechMetrics(isEnabled = true) {
        * WPM
        * ========================================
        */
-      const activeSpeechMs =
-        Math.max(
-          activeSpeechMsRef.current,
-          INITIAL_SPEECH_MS
-        );
+      const idleSpeechMs = lastSpeechResultAtRef.current
+        ? Math.max(0, Date.now() - lastSpeechResultAtRef.current - MAX_SPEECH_GAP_MS)
+        : 0;
+
+      const activeSpeechMs = Math.max(
+        activeSpeechMsRef.current + idleSpeechMs,
+        INITIAL_SPEECH_MS
+      );
 
       const activeSpeechMinutes =
         activeSpeechMs / 60000;
@@ -284,17 +290,15 @@ export function useSpeechMetrics(isEnabled = true) {
        * 25% fillers = 0
        */
       const calculatedClarity =
-        Math.max(
-          0,
-          Math.min(
-            100,
-            Math.round(
-              100 -
-                fillerRatio *
-                  400
-            )
+        Math.max(0, Math.min(100, Math.round(
+          100 - fillerRatio * 400 - (
+            calculatedWpm < 90
+              ? Math.min(35, (90 - calculatedWpm) * 0.35)
+              : calculatedWpm > 170
+                ? Math.min(35, (calculatedWpm - 170) * 0.35)
+                : 0
           )
-        );
+        )));
 
       setWpm(
         Math.round(
@@ -382,6 +386,7 @@ export function useSpeechMetrics(isEnabled = true) {
 
       setIsListening(true);
       setIsStarting(false);
+      recognitionRunningRef.current = true;
       setIsWaitingForSpeech(true);
       setError(null);
     };
@@ -462,6 +467,7 @@ export function useSpeechMetrics(isEnabled = true) {
          * Final results are permanently counted.
          */
         if (result.isFinal) {
+          transcriptRef.current = `${transcriptRef.current} ${transcript}`.trim();
           finalWordCountRef.current +=
             words;
 
@@ -595,12 +601,7 @@ export function useSpeechMetrics(isEnabled = true) {
         event.error ===
         "no-speech"
       ) {
-        setIsListening(false);
         setIsWaitingForSpeech(true);
-        setWpm(0);
-        setFillerWords(0);
-        setClarity(0);
-        setHasSpeechData(false);
         return;
       }
 
@@ -608,11 +609,12 @@ export function useSpeechMetrics(isEnabled = true) {
         event.error ===
         "aborted"
       ) {
-        setIsListening(false);
-        setWpm(0);
-        setFillerWords(0);
-        setClarity(0);
-        setHasSpeechData(false);
+        recognitionRunningRef.current = false;
+        if (shouldListenRef.current) {
+          setIsStarting(true);
+        } else {
+          setIsListening(false);
+        }
         return;
       }
 
@@ -667,6 +669,7 @@ export function useSpeechMetrics(isEnabled = true) {
 
       setIsListening(false);
       setIsStarting(false);
+      recognitionRunningRef.current = false;
     };
 
     /*
@@ -682,7 +685,7 @@ export function useSpeechMetrics(isEnabled = true) {
         "[Aarambh Speech] RECOGNITION END"
       );
 
-      setIsListening(false);
+      recognitionRunningRef.current = false;
 
       /*
        * Restart automatically while the
@@ -695,14 +698,21 @@ export function useSpeechMetrics(isEnabled = true) {
         recognitionRef.current ===
           recognition
       ) {
-        setTimeout(() => {
+        if (restartTimerRef.current) {
+          return;
+        }
+
+        restartTimerRef.current = setTimeout(() => {
+          restartTimerRef.current = null;
           if (
-            !shouldListenRef.current
+            !shouldListenRef.current ||
+            recognitionRunningRef.current
           ) {
             return;
           }
 
           try {
+            setIsStarting(true);
             recognition.start();
 
             console.log(
@@ -713,8 +723,11 @@ export function useSpeechMetrics(isEnabled = true) {
              * Ignore duplicate start
              * errors.
              */
+            setIsStarting(false);
           }
         }, 100);
+      } else {
+        setIsListening(false);
       }
     };
 
@@ -752,6 +765,11 @@ export function useSpeechMetrics(isEnabled = true) {
       window.clearInterval(
         metricInterval
       );
+
+      if (restartTimerRef.current) {
+        window.clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
 
       recognition.onstart =
         null;
@@ -862,6 +880,8 @@ export function useSpeechMetrics(isEnabled = true) {
           finalFillerCountRef.current =
             0;
 
+          transcriptRef.current = '';
+
           interimWordCountRef.current =
             0;
 
@@ -900,6 +920,7 @@ export function useSpeechMetrics(isEnabled = true) {
 
           try {
             recognition.start();
+            recognitionRunningRef.current = true;
           } catch (
             startError
           ) {
@@ -922,6 +943,10 @@ export function useSpeechMetrics(isEnabled = true) {
             }
 
             setIsStarting(false);
+            if (startError?.name === "InvalidStateError") {
+              setIsListening(true);
+              recognitionRunningRef.current = true;
+            }
           }
         } catch (
           microphoneError
@@ -961,5 +986,6 @@ export function useSpeechMetrics(isEnabled = true) {
     isStarting,
     isWaitingForSpeech,
     hasSpeechData,
+    transcript: transcriptRef.current,
   };
 }

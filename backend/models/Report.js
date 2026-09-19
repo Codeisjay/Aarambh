@@ -11,7 +11,7 @@ const reportSchema = new mongoose.Schema({
     ref: 'User',
     required: true,
   },
-  
+
   title: {
     type: String,
     required: true,
@@ -37,6 +37,14 @@ const reportSchema = new mongoose.Schema({
   contentScore: {
     type: Number,
     default: 0, // 0-100
+  },
+  communicationScore: {
+    type: Number,
+    default: 0,
+  },
+  contentQualityScore: {
+    type: Number,
+    default: 0,
   },
   
   // Category Breakdown
@@ -100,6 +108,32 @@ const reportSchema = new mongoose.Schema({
   
   // Detailed Feedback
   detailedFeedback: String,
+  
+    structuredCoaching: {
+      technicalAccuracy: Number,
+      completeness: Number,
+      answerQuality: Number,
+      missingConcepts: [String],
+      strengths: [String],
+      weaknesses: [String],
+      coaching: String,
+      improvedAnswer: String,
+      provider: String,
+    },
+
+  sessionAudit: {
+    totalSnapshots: { type: Number, default: 0 },
+    strengths: [String],
+    weaknesses: [String],
+    observations: [{
+      timestamp: Number,
+      category: String,
+      metric: String,
+      value: Number,
+      status: String,
+      feedback: String,
+    }],
+  },
   
   // Report Status
   status: {

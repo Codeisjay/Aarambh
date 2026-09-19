@@ -1,4 +1,6 @@
 backend/.env
+python_service/.env
+.env
 
 mongodb/data/
 mongodb/log/

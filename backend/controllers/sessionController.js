@@ -291,6 +291,7 @@ exports.completeSession = async (req, res) => {
       });
     }
 
+    const wasAlreadyCompleted = session.status === 'completed';
     session.status = 'completed';
     session.endTime = new Date();
     const requestedDuration = Number(duration);
@@ -308,12 +309,22 @@ exports.completeSession = async (req, res) => {
       const speech = await SpeechMetrics.findOneAndUpdate(
         { sessionId: session._id, userId: req.user.id },
         {
-          sessionId: session._id,
-          userId: req.user.id,
-          pace: Number(speechMetrics.pace) || 0,
-          fillers: Number(speechMetrics.fillers) || 0,
-          clarity: Number(speechMetrics.clarity) || 0,
-          overallScore: Number(speechMetrics.clarity) || 0,
+          $set: {
+            sessionId: session._id,
+            userId: req.user.id,
+            pace: Number(speechMetrics.pace) || 0,
+            fillers: Number(speechMetrics.fillers) || 0,
+            clarity: Number(speechMetrics.clarity) || 0,
+            overallScore: Number(speechMetrics.clarity) || 0,
+          },
+          ...(wasAlreadyCompleted ? {} : {
+            $push: { insights: {
+              timestamp: Date.now(),
+              metric: 'session-completion',
+              value: Number(speechMetrics.clarity) || 0,
+              feedback: `Completed session speech snapshot: ${Number(speechMetrics.pace) || 0} WPM, ${Number(speechMetrics.fillers) || 0} fillers`,
+            } },
+          }),
         },
         { new: true, upsert: true, setDefaultsOnInsert: true }
       );
@@ -323,7 +334,9 @@ exports.completeSession = async (req, res) => {
     await session.save();
 
     // Update user stats
-    await User.findByIdAndUpdate(req.user.id, { $inc: { completedSessions: 1 } });
+    if (!wasAlreadyCompleted) {
+      await User.findByIdAndUpdate(req.user.id, { $inc: { completedSessions: 1 } });
+    }
 
     await AuditLog.create({
       userId: req.user.id,

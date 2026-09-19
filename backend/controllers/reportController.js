@@ -4,6 +4,8 @@ const SpeechMetrics = require('../models/SpeechMetrics');
 const ConfidenceMetrics = require('../models/ConfidenceMetrics');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
+const InterviewQuestion = require('../models/InterviewQuestion');
+const { generateInterviewReport, analyzeWithPythonService } = require('../services/reportGenerator');
 
 // @desc    Generate report for a session
 // @route   POST /api/reports/generate/:sessionId
@@ -30,16 +32,66 @@ exports.generateReport = async (req, res) => {
       });
     }
 
-    // Calculate overall scores
-    const speechScore = session.speechMetricsId?.overallScore || 0;
-    const confidenceScore = session.confidenceMetricsId?.overallConfidenceScore || 0;
-    const contentScore = session.speechMetricsId?.completeness || 0;
+    const speechMetrics = session.speechMetricsId || {};
+    const confidenceMetrics = session.confidenceMetricsId || {};
+
+    const speechScore = speechMetrics.overallScore || 0;
+    const confidenceScore = confidenceMetrics.overallConfidenceScore || 0;
+    const contentScore = speechMetrics.completeness || 0;
     const overallScore = (speechScore + confidenceScore + contentScore) / 3;
 
+    const questionRecord = session.questions?.[0]?.questionId
+      ? await InterviewQuestion.findById(session.questions[0].questionId).lean()
+      : null;
+    const question = session.questions?.[0]?.text || questionRecord?.text || session.title || '';
+    const expectedConcepts = [
+      ...(session.questions?.[0]?.expectedConcepts || []),
+      ...(questionRecord?.keywords || []),
+      ...(questionRecord?.evaluationCriteria || []).map((criterion) => criterion.name).filter(Boolean),
+    ];
+    const aiAnalysis = await analyzeWithPythonService({
+      question,
+      answer: session.transcription || '',
+      expectedConcepts: [...new Set(expectedConcepts)],
+      metrics: {
+        clarity: speechMetrics.clarity,
+        wpm: speechMetrics.pace,
+        fillers: speechMetrics.fillers,
+        pause: speechMetrics.averagePauseDuration,
+        communication_metrics: {
+          clarity: speechMetrics.clarity,
+          pace: speechMetrics.pace,
+          fillers: speechMetrics.fillers,
+          pause: speechMetrics.averagePauseDuration,
+        },
+        confidence_score: confidenceMetrics.overallConfidenceScore,
+        eye_contact: confidenceMetrics.eyeContact,
+        head_stability: confidenceMetrics.posture,
+        nervousness: confidenceMetrics.nervousness,
+      },
+    });
+    const finalAiReport = generateInterviewReport({
+      session,
+      speechMetrics,
+      confidenceMetrics,
+      transcript: session.transcription || '',
+      question,
+      aiAnalysis,
+    });
+
     // Generate insights
-    const strengths = generateStrengths(session.speechMetricsId, session.confidenceMetricsId);
-    const areasForImprovement = generateAreasForImprovement(session.speechMetricsId, session.confidenceMetricsId);
-    const recommendations = generateRecommendations(session.speechMetricsId, session.confidenceMetricsId);
+    const sessionAudit = buildSessionAudit(speechMetrics, confidenceMetrics);
+    console.log(`[Report] Loaded persisted observations: speech=${speechMetrics.insights?.length || 0}, confidence=${confidenceMetrics.insights?.length || 0}, timeline=${confidenceMetrics.metricsByTimestamp?.length || 0}`);
+    const strengths = deduplicateFindings([
+      ...finalAiReport.strengths,
+      ...sessionAudit.strengths,
+      ...generateStrengths(speechMetrics, confidenceMetrics),
+    ]);
+    const areasForImprovement = deduplicateFindings([
+      ...generateAreasForImprovement(speechMetrics, confidenceMetrics),
+      ...sessionAudit.weaknesses,
+    ]);
+    const recommendations = finalAiReport.recommendations.length > 0 ? finalAiReport.recommendations : generateRecommendations(speechMetrics, confidenceMetrics);
 
     // Create report
     const report = await Report.create({
@@ -47,45 +99,49 @@ exports.generateReport = async (req, res) => {
       userId: req.user.id,
       title: session.title,
       description: `Report for interview: ${session.title}`,
-      overallScore,
+      overallScore: finalAiReport.overallScore || overallScore,
       confidenceScore,
       speechScore,
-      contentScore,
+      contentScore: finalAiReport.communicationScore,
+      communicationScore: finalAiReport.communicationScore,
+      contentQualityScore: finalAiReport.contentQualityScore,
       categories: [
-        { name: 'Speech Quality', score: speechScore, weight: 0.3 },
+        { name: 'Communication', score: finalAiReport.communicationScore, weight: 0.35 },
         { name: 'Confidence & Body Language', score: confidenceScore, weight: 0.4 },
-        { name: 'Content & Knowledge', score: contentScore, weight: 0.3 },
+        { name: 'Content Quality', score: finalAiReport.contentQualityScore, weight: 0.25 },
       ],
       speechAnalysis: {
-        paceSummary: `Pace: ${session.speechMetricsId?.pace || 0} WPM`,
-        clarityScore: session.speechMetricsId?.clarity || 0,
-        articulationScore: session.speechMetricsId?.articulation || 0,
-        fillerCount: session.speechMetricsId?.fillers || 0,
-        pauseAnalysis: `Average pause: ${session.speechMetricsId?.averagePauseDuration || 0}s`,
+        paceSummary: `Pace: ${speechMetrics.pace || 0} WPM`,
+        clarityScore: speechMetrics.clarity || 0,
+        articulationScore: speechMetrics.articulation || 0,
+        fillerCount: speechMetrics.fillers || 0,
+        pauseAnalysis: `Average pause: ${speechMetrics.averagePauseDuration || 0}s`,
       },
       confidenceAnalysis: {
-        eyeContactScore: session.confidenceMetricsId?.eyeContact || 0,
-        postureScore: session.confidenceMetricsId?.posture || 0,
-        gestureScore: session.confidenceMetricsId?.gestures || 0,
-        engagementScore: session.confidenceMetricsId?.engagement || 0,
-        nervousnessLevel: nervousnessLevel(session.confidenceMetricsId?.nervousness || 0),
+        eyeContactScore: confidenceMetrics.eyeContact || 0,
+        postureScore: confidenceMetrics.posture || 0,
+        gestureScore: confidenceMetrics.gestures || 0,
+        engagementScore: confidenceMetrics.engagement || 0,
+        nervousnessLevel: nervousnessLevel(confidenceMetrics.nervousness || 0),
       },
       contentAnalysis: {
-        completenessScore: session.speechMetricsId?.completeness || 0,
-        accuracyScore: session.speechMetricsId?.accuracy || 0,
-        relevanceScore: session.speechMetricsId?.relevance || 0,
-        depthOfKnowledge: depthLevel(session.speechMetricsId?.completeness || 0),
+        completenessScore: finalAiReport.metrics.completeness,
+        accuracyScore: finalAiReport.metrics.accuracy,
+        relevanceScore: finalAiReport.metrics.relevance,
+        depthOfKnowledge: depthLevel(finalAiReport.metrics.completeness),
       },
       strengths,
       areasForImprovement,
       recommendations,
-      executiveSummary: generateExecutiveSummary(overallScore, strengths, areasForImprovement),
-      detailedFeedback: generateDetailedFeedback(session, session.speechMetricsId, session.confidenceMetricsId),
+      executiveSummary: finalAiReport.summary || generateExecutiveSummary(overallScore, strengths, areasForImprovement),
+      detailedFeedback: finalAiReport.summary || generateDetailedFeedback(session, speechMetrics, confidenceMetrics),
+      structuredCoaching: finalAiReport.structuredCoaching,
+      sessionAudit,
     });
 
     // Update user average score
     const user = await User.findById(req.user.id);
-    user.averageScore = (user.averageScore * (user.completedSessions - 1) + overallScore) / user.completedSessions;
+    user.averageScore = (user.averageScore * (user.completedSessions - 1) + finalAiReport.overallScore) / user.completedSessions;
     await user.save();
 
     await AuditLog.create({
@@ -97,6 +153,8 @@ exports.generateReport = async (req, res) => {
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
+
+    console.log(`[Report] session=${sessionId} observations=${sessionAudit.totalSnapshots} strengths=${strengths.length} weaknesses=${areasForImprovement.length} ai=${aiAnalysis ? 'available' : 'fallback'}`);
 
     res.status(201).json({
       success: true,
@@ -254,6 +312,80 @@ function generateStrengths(speechMetrics, confidenceMetrics) {
   return strengths.length > 0 ? strengths : ['Good overall performance'];
 }
 
+function buildSessionAudit(speechMetrics, confidenceMetrics) {
+  const observations = [];
+  const strengths = [];
+  const weaknesses = [];
+  const speechInsights = Array.isArray(speechMetrics?.insights) ? speechMetrics.insights : [];
+  const confidenceInsights = Array.isArray(confidenceMetrics?.insights) ? confidenceMetrics.insights : [];
+  const confidenceTimeline = Array.isArray(confidenceMetrics?.metricsByTimestamp) ? confidenceMetrics.metricsByTimestamp : [];
+
+  const addObservation = (category, metric, value, good, feedback, timestamp) => {
+    observations.push({
+      timestamp: timestamp || Date.now(),
+      category,
+      metric,
+      value: Number(value || 0),
+      status: good ? 'strength' : 'weakness',
+      feedback,
+    });
+    const target = good ? strengths : weaknesses;
+    if (!target.includes(feedback)) target.push(feedback);
+  };
+
+  const seenCompletionSnapshots = new Set();
+  [...speechInsights, ...confidenceInsights].forEach((insight) => {
+    if (!insight.feedback) return;
+    const category = insight.metric?.startsWith('confidence') ? 'confidence' : 'speech';
+    const completionKey = `${insight.metric}:${insight.value}:${insight.feedback}`;
+    if (insight.metric === 'session-completion') {
+      if (seenCompletionSnapshots.has(completionKey)) return;
+      seenCompletionSnapshots.add(completionKey);
+    }
+    if (!observations.some((item) => item.feedback === insight.feedback && item.timestamp === insight.timestamp)) {
+      const good = category === 'confidence'
+        ? Number(insight.value) >= 70
+        : insight.metric === 'session-completion'
+          ? Number(insight.value) >= 70
+          : false;
+      addObservation(category, insight.metric, insight.value, good, insight.feedback, insight.timestamp);
+    }
+  });
+
+  if (confidenceInsights.length === 0) {
+    confidenceTimeline.forEach((point) => {
+      addObservation('confidence', 'timeline', point.engagement ?? point.eyeContact, true,
+        `Persisted confidence snapshot: eye contact ${point.eyeContact}, posture ${point.posture}`,
+        point.timestamp);
+    });
+  }
+
+  return {
+    totalSnapshots: observations.length,
+    strengths,
+    weaknesses,
+    observations,
+  };
+}
+
+function deduplicateFindings(items) {
+  const selected = new Map();
+  items.filter(Boolean).forEach((item) => {
+    const text = String(item).trim();
+    const normalized = text.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ');
+    const category = normalized.includes('eye contact') ? 'eye-contact'
+      : normalized.includes('speech') || normalized.includes('clarity') ? 'speech-clarity'
+      : normalized.includes('pace') || normalized.includes('speaking') ? 'pace'
+      : normalized.includes('posture') || normalized.includes('body language') ? 'posture'
+      : normalized.includes('filler') ? 'fillers'
+      : normalized.includes('engagement') ? 'engagement'
+      : normalized;
+    const existing = selected.get(category);
+    if (!existing || text.length > existing.length) selected.set(category, text);
+  });
+  return [...selected.values()];
+}
+
 function generateAreasForImprovement(speechMetrics, confidenceMetrics) {
   const areas = [];
   
@@ -321,3 +453,6 @@ function generateDetailedFeedback(session, speechMetrics, confidenceMetrics) {
   Body language showed ${confidenceMetrics?.gestures || 70}/100 for purposeful gestures and ${confidenceMetrics?.eyeContact || 75}/100 for eye contact.
   Continue practicing to further improve these areas.`;
 }
+
+exports.buildSessionAudit = buildSessionAudit;
+exports.deduplicateFindings = deduplicateFindings;

@@ -120,6 +120,30 @@ const settingsSchema = new mongoose.Schema({
       default: '1-year',
     },
   },
+
+  // AI Decision thresholds
+  aiThresholds: {
+    eyeContactThreshold: {
+      type: Number,
+      default: 75,
+    },
+    fillerThreshold: {
+      type: Number,
+      default: 5,
+    },
+    wpmThreshold: {
+      type: Number,
+      default: 90,
+    },
+    pauseThreshold: {
+      type: Number,
+      default: 3,
+    },
+    blinkThreshold: {
+      type: Number,
+      default: 25,
+    },
+  },
   
   // Privacy Settings
   privacySettings: {

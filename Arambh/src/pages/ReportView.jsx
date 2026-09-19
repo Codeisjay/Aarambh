@@ -24,8 +24,9 @@ export default function ReportView() {
   if (!report) return <Panel><p className="text-slate-400">Loading report...</p></Panel>;
 
   const overallScore = Math.round(report.overallScore || 0);
-  const strengths = report.strengths || [];
-  const weaknesses = report.areasForImprovement || [];
+  const sessionAudit = report.sessionAudit || {};
+  const strengths = [...new Set([...(report.strengths || []), ...(sessionAudit.strengths || [])])];
+  const weaknesses = [...new Set([...(report.areasForImprovement || []), ...(sessionAudit.weaknesses || [])])];
   const session = report.sessionId && typeof report.sessionId === 'object' ? report.sessionId : {};
   const duration = Number(session.duration || 0);
 
@@ -112,10 +113,10 @@ export default function ReportView() {
                 <MetricBox label="Confidence" value={`${Math.round(report.confidenceScore || 0)}%`} good />
               </motion.div>
               <motion.div variants={itemVariants}>
-                <MetricBox label="Communication" value={`${Math.round(report.contentScore || 0)}%`} good />
+                <MetricBox label="Communication" value={`${Math.round(report.communicationScore ?? report.contentScore ?? 0)}%`} good />
               </motion.div>
               <motion.div variants={itemVariants}>
-                <MetricBox label="Content Quality" value={`${Math.round(report.contentAnalysis?.relevanceScore || 0)}%`} good />
+                <MetricBox label="Content Quality" value={`${Math.round(report.contentQualityScore ?? report.contentAnalysis?.relevanceScore ?? 0)}%`} good />
               </motion.div>
             </motion.div>
           </motion.div>
@@ -196,6 +197,54 @@ export default function ReportView() {
           </motion.div>
         </Panel>
       </motion.div>
+
+      <motion.div className="mt-6" variants={itemVariants} initial="hidden" animate="visible" transition={{ delay: 0.45 }}>
+        <Panel>
+          <h2 className="text-lg font-semibold mb-4">Session Audit</h2>
+          <p className="text-sm text-slate-400 mb-4">
+            {sessionAudit.totalSnapshots || 0} live observations were reviewed from this session.
+          </p>
+          <div className="space-y-2 max-h-72 overflow-y-auto">
+            {(sessionAudit.observations || []).map((observation, index) => (
+              <div key={`${observation.metric}-${observation.timestamp}-${index}`} className="flex items-start justify-between gap-4 border-b border-slate-800 py-2 text-sm">
+                <div>
+                  <p className={observation.status === 'strength' ? 'text-green-400' : 'text-red-400'}>{observation.feedback}</p>
+                  <p className="text-xs text-slate-500">{observation.category} / {observation.metric}</p>
+                </div>
+                <span className="text-slate-300">{Math.round(observation.value || 0)}</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </motion.div>
+
+      {report.structuredCoaching && (
+        <motion.div className="mt-6" variants={itemVariants} initial="hidden" animate="visible" transition={{ delay: 0.48 }}>
+          <Panel>
+            <h2 className="text-lg font-semibold mb-4">Structured AI Coaching</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+              <MetricBox label="Technical Accuracy" value={`${Math.round(report.structuredCoaching.technicalAccuracy || 0)}%`} good />
+              <MetricBox label="Completeness" value={`${Math.round(report.structuredCoaching.completeness || 0)}%`} good />
+              <MetricBox label="Answer Quality" value={`${Math.round(report.structuredCoaching.answerQuality || 0)}%`} good />
+            </div>
+            <p className="text-slate-300 mb-4">{report.structuredCoaching.coaching}</p>
+            {report.structuredCoaching.missingConcepts?.length > 0 && (
+              <p className="text-amber-300 text-sm mb-3">Missing concepts: {report.structuredCoaching.missingConcepts.join(', ')}</p>
+            )}
+            {report.structuredCoaching.weaknesses?.length > 0 && (
+              <ul className="space-y-1 text-red-300 text-sm mb-3">
+                {report.structuredCoaching.weaknesses.map((weakness, index) => <li key={index}>- {weakness}</li>)}
+              </ul>
+            )}
+            {report.structuredCoaching.improvedAnswer && (
+              <div className="border-t border-slate-800 pt-3">
+                <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">Improved Answer</p>
+                <p className="text-slate-300 text-sm">{report.structuredCoaching.improvedAnswer}</p>
+              </div>
+            )}
+          </Panel>
+        </motion.div>
+      )}
 
       {/* Actions */}
       <motion.div
