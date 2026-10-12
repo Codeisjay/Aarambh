@@ -94,14 +94,24 @@ export const settingsAPI = {
 
 // ============= SESSION ENDPOINTS =============
 export const sessionAPI = {
-  createSession: (sessionData) =>
-    api.post('/sessions', sessionData),
+  createSession: (sessionData) => {
+    const requestData = new FormData();
+    Object.entries(sessionData).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) requestData.append(key, value);
+    });
+    return api.post('/sessions', requestData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
   
   getSessions: (page = 1, limit = 10, filters = {}) =>
     api.get(`/sessions?page=${page}&limit=${limit}`, { params: filters }),
   
   getSessionById: (sessionId) =>
     api.get(`/sessions/${sessionId}`),
+
+  getNextInterviewQuestion: (sessionId, payload = {}) =>
+    api.post(`/sessions/${sessionId}/interview/next`, payload),
   
   startSession: (sessionId) =>
     api.put(`/sessions/${sessionId}/start`),
@@ -165,6 +175,9 @@ export const reportAPI = {
   
   getReportById: (reportId) =>
     api.get(`/reports/${reportId}`),
+
+  downloadReport: (reportId) =>
+    api.get(`/reports/${reportId}/download`, { responseType: 'blob' }),
   
   deleteReport: (reportId) =>
     api.delete(`/reports/${reportId}`),

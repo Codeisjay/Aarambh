@@ -37,9 +37,8 @@ export function useSpeechMetrics(isEnabled = true) {
     useState(false);
 
   const recognitionRef = useRef(null);
-  const shouldListenRef = useRef(false);
-  const recognitionRunningRef = useRef(false);
-  const restartTimerRef = useRef(null);
+  const isListeningRef = useRef(false);
+  const isStartingRef = useRef(false);
 
   /*
    * ==========================================
@@ -70,6 +69,8 @@ export function useSpeechMetrics(isEnabled = true) {
    */
   const interimWordCountRef = useRef(0);
   const interimFillerCountRef = useRef(0);
+  const [transcript, setTranscript] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
 
   /*
    * ==========================================
@@ -234,12 +235,8 @@ export function useSpeechMetrics(isEnabled = true) {
        * WPM
        * ========================================
        */
-      const idleSpeechMs = lastSpeechResultAtRef.current
-        ? Math.max(0, Date.now() - lastSpeechResultAtRef.current - MAX_SPEECH_GAP_MS)
-        : 0;
-
       const activeSpeechMs = Math.max(
-        activeSpeechMsRef.current + idleSpeechMs,
+        activeSpeechMsRef.current,
         INITIAL_SPEECH_MS
       );
 
@@ -386,7 +383,8 @@ export function useSpeechMetrics(isEnabled = true) {
 
       setIsListening(true);
       setIsStarting(false);
-      recognitionRunningRef.current = true;
+      isListeningRef.current = true;
+      isStartingRef.current = false;
       setIsWaitingForSpeech(true);
       setError(null);
     };
@@ -468,6 +466,8 @@ export function useSpeechMetrics(isEnabled = true) {
          */
         if (result.isFinal) {
           transcriptRef.current = `${transcriptRef.current} ${transcript}`.trim();
+          setTranscript(transcriptRef.current);
+          setInterimTranscript('');
           finalWordCountRef.current +=
             words;
 
@@ -495,6 +495,7 @@ export function useSpeechMetrics(isEnabled = true) {
          * Don't permanently add it.
          */
         else {
+          setInterimTranscript(transcript);
           currentInterimWords +=
             words;
 
@@ -516,6 +517,10 @@ export function useSpeechMetrics(isEnabled = true) {
 
       interimFillerCountRef.current =
         currentInterimFillers;
+
+      if (currentInterimWords === 0) {
+        setInterimTranscript('');
+      }
 
       setHasSpeechData(true);
       setIsWaitingForSpeech(false);
@@ -609,12 +614,10 @@ export function useSpeechMetrics(isEnabled = true) {
         event.error ===
         "aborted"
       ) {
-        recognitionRunningRef.current = false;
-        if (shouldListenRef.current) {
-          setIsStarting(true);
-        } else {
-          setIsListening(false);
-        }
+        isListeningRef.current = false;
+        isStartingRef.current = false;
+        setIsListening(false);
+        setIsStarting(false);
         return;
       }
 
@@ -625,9 +628,6 @@ export function useSpeechMetrics(isEnabled = true) {
         event.error ===
         "not-allowed"
       ) {
-        shouldListenRef.current =
-          false;
-
         setError(
           "Microphone permission was denied."
         );
@@ -640,9 +640,6 @@ export function useSpeechMetrics(isEnabled = true) {
         event.error ===
         "audio-capture"
       ) {
-        shouldListenRef.current =
-          false;
-
         setError(
           "Microphone could not be accessed."
         );
@@ -669,7 +666,8 @@ export function useSpeechMetrics(isEnabled = true) {
 
       setIsListening(false);
       setIsStarting(false);
-      recognitionRunningRef.current = false;
+      isListeningRef.current = false;
+      isStartingRef.current = false;
     };
 
     /*
@@ -685,50 +683,10 @@ export function useSpeechMetrics(isEnabled = true) {
         "[Aarambh Speech] RECOGNITION END"
       );
 
-      recognitionRunningRef.current = false;
-
-      /*
-       * Restart automatically while the
-       * interview is active.
-       *
-       * NO TIME LIMIT.
-       */
-      if (
-        shouldListenRef.current &&
-        recognitionRef.current ===
-          recognition
-      ) {
-        if (restartTimerRef.current) {
-          return;
-        }
-
-        restartTimerRef.current = setTimeout(() => {
-          restartTimerRef.current = null;
-          if (
-            !shouldListenRef.current ||
-            recognitionRunningRef.current
-          ) {
-            return;
-          }
-
-          try {
-            setIsStarting(true);
-            recognition.start();
-
-            console.log(
-              "[Aarambh Speech] RESTARTED"
-            );
-          } catch {
-            /*
-             * Ignore duplicate start
-             * errors.
-             */
-            setIsStarting(false);
-          }
-        }, 100);
-      } else {
-        setIsListening(false);
-      }
+      isListeningRef.current = false;
+      isStartingRef.current = false;
+      setIsListening(false);
+      setIsStarting(false);
     };
 
     /*
@@ -759,17 +717,9 @@ export function useSpeechMetrics(isEnabled = true) {
         "[Aarambh Speech] CLEANUP"
       );
 
-      shouldListenRef.current =
-        false;
-
       window.clearInterval(
         metricInterval
       );
-
-      if (restartTimerRef.current) {
-        window.clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = null;
-      }
 
       recognition.onstart =
         null;
@@ -797,6 +747,8 @@ export function useSpeechMetrics(isEnabled = true) {
 
       recognitionRef.current =
         null;
+      isListeningRef.current = false;
+      isStartingRef.current = false;
     };
   }, [
     isEnabled,
@@ -835,13 +787,11 @@ export function useSpeechMetrics(isEnabled = true) {
           return;
         }
 
-        if (
-          isListening ||
-          isStarting
-        ) {
+        if (isListeningRef.current || isStartingRef.current) {
           return;
         }
 
+        isStartingRef.current = true;
         setIsStarting(true);
         setError(null);
 
@@ -881,6 +831,8 @@ export function useSpeechMetrics(isEnabled = true) {
             0;
 
           transcriptRef.current = '';
+          setTranscript('');
+          setInterimTranscript('');
 
           interimWordCountRef.current =
             0;
@@ -911,16 +863,12 @@ export function useSpeechMetrics(isEnabled = true) {
            * NO TIME LIMIT
            * ====================================
            */
-          shouldListenRef.current =
-            true;
-
           console.log(
             "[Aarambh Speech] START LISTENING"
           );
 
           try {
             recognition.start();
-            recognitionRunningRef.current = true;
           } catch (
             startError
           ) {
@@ -943,9 +891,10 @@ export function useSpeechMetrics(isEnabled = true) {
             }
 
             setIsStarting(false);
+            isStartingRef.current = false;
             if (startError?.name === "InvalidStateError") {
               setIsListening(true);
-              recognitionRunningRef.current = true;
+              isListeningRef.current = true;
             }
           }
         } catch (
@@ -957,6 +906,7 @@ export function useSpeechMetrics(isEnabled = true) {
           );
 
           setIsStarting(false);
+          isStartingRef.current = false;
 
           setError(
             "Please allow microphone access."
@@ -965,10 +915,38 @@ export function useSpeechMetrics(isEnabled = true) {
       },
       [
         isSupported,
-        isListening,
-        isStarting,
       ]
     );
+
+  const stopListening = useCallback(() => {
+    isStartingRef.current = false;
+    isListeningRef.current = false;
+    setIsListening(false);
+    setIsStarting(false);
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      // Recognition may already be stopped.
+    }
+  }, []);
+
+  const resetTranscript = useCallback(() => {
+    finalWordCountRef.current = 0;
+    finalFillerCountRef.current = 0;
+    transcriptRef.current = '';
+    setTranscript('');
+    setInterimTranscript('');
+    interimWordCountRef.current = 0;
+    interimFillerCountRef.current = 0;
+    activeSpeechMsRef.current = 0;
+    lastSpeechResultAtRef.current = null;
+    firstSpeechAtRef.current = null;
+    setWpm(0);
+    setFillerWords(0);
+    setClarity(0);
+    setHasSpeechData(false);
+    setIsWaitingForSpeech(true);
+  }, []);
 
   /*
    * ==========================================
@@ -983,9 +961,12 @@ export function useSpeechMetrics(isEnabled = true) {
     isSupported,
     error,
     startListening,
+    stopListening,
     isStarting,
     isWaitingForSpeech,
     hasSpeechData,
-    transcript: transcriptRef.current,
+    resetTranscript,
+    transcript,
+    interimTranscript,
   };
 }

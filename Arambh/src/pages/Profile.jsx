@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { Mail, Phone, Briefcase, MapPin, Award, Clock, TrendingUp, Edit2, Save, X, User as UserIcon, Calendar, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
-import { userAPI } from '../services/endpoints';
+import { sessionAPI, userAPI } from '../services/endpoints';
 import Panel from '../components/Panel';
 
 export default function Profile() {
@@ -27,6 +27,7 @@ export default function Profile() {
   // Load profile data from backend on component mount
   useEffect(() => {
     loadProfileData();
+    loadStats();
   }, []);
 
   const loadProfileData = async () => {
@@ -39,6 +40,12 @@ export default function Profile() {
 
       const userData = response.data.data;
       setProfileData(userData);
+      setStats(previousStats => ({
+        ...previousStats,
+        memberSince: userData.createdAt
+          ? new Date(userData.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+          : previousStats.memberSince,
+      }));
       
       // Initialize form with backend data
       setFormData({
@@ -59,6 +66,30 @@ export default function Profile() {
       });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadStats = async () => {
+    try {
+      const response = await sessionAPI.getSessions(1, 1000, { status: 'completed' });
+      const sessions = response.data.data || [];
+      const totalDuration = sessions.reduce((total, session) => total + (session.duration || 0), 0);
+      const scores = sessions.map(session => Number(session.overallScore || session.confidenceScore || 0));
+      const averageScore = scores.length
+        ? scores.reduce((total, score) => total + score, 0) / scores.length
+        : 0;
+      const totalMinutes = Math.floor(totalDuration / 60);
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+
+      setStats(previousStats => ({
+        ...previousStats,
+        totalSessions: response.data.pagination?.total ?? sessions.length,
+        totalTime: hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`,
+        avgScore: averageScore.toFixed(1),
+      }));
+    } catch (error) {
+      console.error('Error loading profile stats:', error);
     }
   };
 

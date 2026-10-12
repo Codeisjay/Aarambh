@@ -25,5 +25,6 @@ python ai_server.py
 Endpoints:
 - `POST /api/transcribe`: Faster-Whisper transcription for an uploaded audio file
 - `POST /api/analyze`: Sentence-BERT relevance plus Gemini/local coaching
+- `POST /api/parse-resume`: Extract structured skills, objectives, achievements, experience, education, projects, certifications, and interview focus areas from a PDF, DOCX, or TXT resume
 
 Set `AI_SERVICE_URL=http://127.0.0.1:5100` in the backend environment. Set `COACHING_PROVIDER=gemini` and `GEMINI_API_KEY` to enable Gemini coaching; otherwise the service uses a deterministic local coaching adapter.

@@ -1,5 +1,7 @@
 const User = require('../models/User');
+const Session = require('../models/Session');
 const AuditLog = require('../models/AuditLog');
+const mongoose = require('mongoose');
 
 // @desc    Get user profile
 // @route   GET /api/users/me
@@ -346,6 +348,50 @@ exports.getUserStats = async (req, res) => {
     });
   } catch (error) {
     console.error('Get User Stats Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching user statistics',
+    });
+  }
+};
+
+// @desc    Get statistics for the authenticated user
+// @route   GET /api/users/me/stats
+// @access  Private
+exports.getCurrentUserStats = async (req, res) => {
+  try {
+    const [summary] = await Session.aggregate([
+      { $match: { userId: new mongoose.Types.ObjectId(req.user.id) } },
+      {
+        $group: {
+          _id: null,
+          totalSessions: { $sum: 1 },
+          completedSessions: {
+            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
+          },
+          totalDuration: { $sum: '$duration' },
+          averageScore: {
+            $avg: {
+              $cond: [{ $eq: ['$status', 'completed'] }, '$overallScore', null],
+            },
+          },
+          lastSessionDate: { $max: '$updatedAt' },
+        },
+      },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        totalSessions: summary?.totalSessions || 0,
+        completedSessions: summary?.completedSessions || 0,
+        totalDuration: summary?.totalDuration || 0,
+        averageScore: summary?.averageScore || 0,
+        lastSessionDate: summary?.lastSessionDate || null,
+      },
+    });
+  } catch (error) {
+    console.error('Get Current User Stats Error:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching user statistics',

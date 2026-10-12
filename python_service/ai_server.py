@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from coaching_service import generate_coaching
 from relevance_service import semantic_relevance_score
 from whisper_service import transcribe_file
+from resume_parser import parse_resume
+from adaptive_interviewer import generate_next
 
 load_dotenv()
 
@@ -27,6 +29,8 @@ def index():
             'health': 'GET /api/health',
             'analyze': 'POST /api/analyze',
             'transcribe': 'POST /api/transcribe',
+                'parse_resume': 'POST /api/parse-resume',
+                'interview_next': 'POST /api/interview/next',
         },
     })
 
@@ -73,6 +77,26 @@ def transcribe():
         return jsonify({'success': True, **transcribe_file(str(target))})
     finally:
         target.unlink(missing_ok=True)
+
+
+@app.post('/api/parse-resume')
+def parse_resume_endpoint():
+    if 'resume' not in request.files:
+        return jsonify({'success': False, 'message': 'resume file is required'}), 400
+    upload = request.files['resume']
+    try:
+        result = parse_resume(upload.read(), upload.mimetype, upload.filename)
+        return jsonify({'success': True, 'data': result})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': f'Could not parse resume: {exc}'}), 422
+
+
+@app.post('/api/interview/next')
+def interview_next():
+    payload = request.get_json(silent=True) or {}
+    if not payload.get('resume_profile'):
+        return jsonify({'success': False, 'message': 'resume_profile is required'}), 400
+    return jsonify({'success': True, 'data': generate_next(payload)})
 
 
 if __name__ == '__main__':

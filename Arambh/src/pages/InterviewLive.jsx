@@ -2,8 +2,7 @@
 import { Play, Pause, Square, FileText } from "lucide-react";
 import { motion } from "framer-motion";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useLocation } from "react-router-dom";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import Panel from "../components/Panel";
 import MetricBox from "../components/MetricBox";
 import FeedbackRow from "../components/FeedbackRow";
@@ -11,6 +10,7 @@ import SpeechMeter from "../components/SpeechMeter";
 import ConfidenceMeter from "../components/ConfidenceMeter";
 import TimerDisplay from "../components/TimerDisplay";
 import WebcamPanel from "../components/WebcamPanel";
+import InterviewerPanel from "../components/InterviewerPanel";
 import { useSpeechMetrics } from "../hooks/useSpeechMetrics";
 import { useConfidenceScore } from "../hooks/useConfidenceScore";
 import { aiAPI, reportAPI, sessionAPI } from "../services/endpoints";
@@ -22,20 +22,54 @@ const SAFE_WPM_MAX = 150;
 const RAPID_WPM_DROP = 8;
 const GOOD_CLARITY_MIN = 70;
 const MAX_INTERVIEW_SECONDS = 15 * 60;
+const ANSWER_SILENCE_DELAY_MS = 1800;
+
+const InterviewState = {
+  IDLE: "idle",
+  AI_SPEAKING: "ai-speaking",
+  LISTENING: "listening",
+  PROCESSING: "processing",
+  FINISHED: "finished",
+};
+
+const normalizeSessionId = (value) => {
+  const match = String(value || '').match(/[a-f\d]{24}/i);
+  return match ? match[0] : null;
+};
 
 export default function InterviewLive() {
-  const { state } = useLocation();
+  const { state, search } = useLocation();
   const navigate = useNavigate();
-  const sessionId = state?.sessionId || null;
+  const urlSessionId = normalizeSessionId(new URLSearchParams(search).get('sessionId'));
+  const storedSessionId = typeof window !== 'undefined'
+    ? normalizeSessionId(sessionStorage.getItem('currentInterviewSessionId') || localStorage.getItem('currentInterviewSessionId'))
+    : null;
+  const stateSessionId = normalizeSessionId(state?.sessionId);
+  const [resolvedSessionId, setResolvedSessionId] = useState(stateSessionId || urlSessionId || storedSessionId || null);
+  const sessionId = resolvedSessionId || null;
   const [isPaused, setIsPaused] = useState(false);
   const [isSessionEnded, setIsSessionEnded] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [reportError, setReportError] = useState(null);
+  const [currentQuestion, setCurrentQuestion] = useState(null);
+  const [questionError, setQuestionError] = useState(null);
+  const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
+  const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
+  const [isQuestionSpeaking, setIsQuestionSpeaking] = useState(false);
+  const [interviewState, setInterviewState] = useState(InterviewState.IDLE);
   const [whisperError, setWhisperError] = useState(null);
   const [isRapidSilence, setIsRapidSilence] = useState(false);
   const previousWpmRef = useRef(null);
   const autoEndTriggeredRef = useRef(false);
+  const interviewAnswersRef = useRef([]);
+  const silenceTimerRef = useRef(null);
+  const spokenQuestionRef = useRef('');
+  const answerReadyAtRef = useRef(0);
+  const answerSubmittedRef = useRef(false);
+  const questionRequestInFlightRef = useRef(false);
+  const initialQuestionRequestedRef = useRef(false);
+  const isMountedRef = useRef(true);
   const { startRecording, stopRecording, isRecording, error: recorderError } = useAudioRecorder();
   const {
     wpm,
@@ -45,11 +79,20 @@ export default function InterviewLive() {
     isSupported: isSpeechSupported,
     error: speechError,
     startListening,
-    isStarting: isSpeechStarting,
     isWaitingForSpeech,
     hasSpeechData,
+    resetTranscript,
     transcript,
+    interimTranscript,
+    stopListening,
   } = useSpeechMetrics(!isPaused && !isSessionEnded);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
   const liveMetrics = useLiveMetrics(sessionId, { wpm, fillerWords, clarity, eyeContact: 0, blinkScore: 0, headStability: 0, overallConfidence: 0, warnings: [], feedback: [] });
   const {
     eyeContact,
@@ -68,8 +111,69 @@ export default function InterviewLive() {
   const liveWarnings = liveMetrics.warnings && liveMetrics.warnings.length > 0 ? liveMetrics.warnings : warnings;
 
   useEffect(() => {
+    if (stateSessionId) {
+      setResolvedSessionId(stateSessionId);
+    } else if (urlSessionId) {
+      setResolvedSessionId(urlSessionId);
+    } else if (storedSessionId) {
+      setResolvedSessionId(storedSessionId);
+    }
+  }, [stateSessionId, urlSessionId, storedSessionId]);
+
+  useEffect(() => {
+    if (sessionId) {
+      sessionStorage.setItem('currentInterviewSessionId', sessionId);
+      localStorage.setItem('currentInterviewSessionId', sessionId);
+    } else {
+      sessionStorage.removeItem('currentInterviewSessionId');
+      localStorage.removeItem('currentInterviewSessionId');
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      let cancelled = false;
+      sessionAPI.getSessions(1, 20, { status: 'in-progress' })
+        .then((response) => {
+          if (cancelled) return;
+          const activeSession = response?.data?.data?.[0];
+          if (activeSession?._id) {
+            setResolvedSessionId(activeSession._id);
+          }
+        })
+        .catch(() => {
+          // Ignore and keep the current flow as-is.
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
     if (isSpeechListening && !isRecording && !isSessionEnded) startRecording();
   }, [isSpeechListening, isRecording, isSessionEnded, startRecording]);
+
+  useEffect(() => {
+    if (!sessionId || currentQuestion || isSessionEnded || initialQuestionRequestedRef.current || questionRequestInFlightRef.current) return;
+    initialQuestionRequestedRef.current = true;
+    questionRequestInFlightRef.current = true;
+    setIsLoadingQuestion(true);
+    sessionAPI.getNextInterviewQuestion(sessionId)
+      .then((response) => {
+        setCurrentQuestion(response.data.data);
+        setInterviewState(InterviewState.AI_SPEAKING);
+      })
+      .catch((error) => {
+        initialQuestionRequestedRef.current = false;
+        setQuestionError(error.response?.data?.message || 'Could not load the interview question');
+      })
+      .finally(() => {
+        questionRequestInFlightRef.current = false;
+        setIsLoadingQuestion(false);
+      });
+  }, [currentQuestion, isSessionEnded, sessionId]);
 
   useEffect(() => {
     if (!isSpeechListening || !hasSpeechData || isSessionEnded) {
@@ -107,11 +211,12 @@ export default function InterviewLive() {
   }, [isPaused, isSessionEnded]);
 
   const handleStartNewSession = () => {
+    sessionStorage.removeItem('currentInterviewSessionId');
     navigate('/interview-setup');
   };
 
   const handleEndSession = useCallback(async () => {
-    let finalTranscript = transcript;
+    let finalTranscript = [...interviewAnswersRef.current, transcript].filter(Boolean).join('\n\n');
     setWhisperError(null);
 
     const audioBlob = await stopRecording();
@@ -138,7 +243,19 @@ export default function InterviewLive() {
         console.warn('[Session] Could not complete backend session:', error.message);
       }
     }
+    setInterviewState(InterviewState.FINISHED);
     setIsSessionEnded(true);
+    if ('speechSynthesis' in window) {
+      window.setTimeout(() => {
+        const farewell = new SpeechSynthesisUtterance(
+          'Thank you for completing your AARAMBH mock interview. Your responses have been recorded. All the best.'
+        );
+        farewell.lang = 'en-IN';
+        farewell.rate = 0.95;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(farewell);
+      }, 0);
+    }
   }, [clarity, elapsedSeconds, fillerWords, recorderError, sessionId, stopRecording, transcript, wpm]);
 
   useEffect(() => {
@@ -172,6 +289,107 @@ export default function InterviewLive() {
       setIsGeneratingReport(false);
     }
   };
+
+  const finishAnswer = useCallback(async () => {
+    if (interviewState !== InterviewState.LISTENING || answerSubmittedRef.current) return;
+    answerSubmittedRef.current = true;
+    setInterviewState(InterviewState.PROCESSING);
+    stopListening();
+
+    const answerText = `${transcript} ${interimTranscript}`.trim();
+    if (!sessionId || !currentQuestion || !answerText) {
+      answerSubmittedRef.current = false;
+      setInterviewState(InterviewState.LISTENING);
+      setQuestionError('Speak an answer before requesting the next question.');
+      return;
+    }
+    if (questionRequestInFlightRef.current) return;
+    questionRequestInFlightRef.current = true;
+    try {
+      setIsSubmittingAnswer(true);
+      setQuestionError(null);
+      interviewAnswersRef.current.push(answerText);
+      const response = await sessionAPI.getNextInterviewQuestion(sessionId, {
+        answer: answerText,
+        analysis: {},
+      });
+      if (!isMountedRef.current) return;
+      setCurrentQuestion(response.data.data);
+      resetTranscript();
+      setInterviewState(InterviewState.AI_SPEAKING);
+    } catch (error) {
+      if (!isMountedRef.current) return;
+      answerSubmittedRef.current = false;
+      setInterviewState(InterviewState.LISTENING);
+      setQuestionError(error.response?.data?.message || 'Could not evaluate the answer');
+    } finally {
+      questionRequestInFlightRef.current = false;
+      setIsSubmittingAnswer(false);
+    }
+  }, [currentQuestion, interimTranscript, interviewState, resetTranscript, sessionId, stopListening, transcript]);
+
+  useEffect(() => {
+    if (interviewState !== InterviewState.AI_SPEAKING || !currentQuestion?.question || isSessionEnded || isPaused) return undefined;
+    if (!('speechSynthesis' in window)) {
+      answerReadyAtRef.current = Date.now();
+      setInterviewState(InterviewState.LISTENING);
+      startListening();
+      return undefined;
+    }
+
+    window.speechSynthesis.cancel();
+    stopListening();
+    resetTranscript();
+    answerSubmittedRef.current = false;
+    answerReadyAtRef.current = 0;
+    setIsQuestionSpeaking(true);
+    spokenQuestionRef.current = currentQuestion.question;
+    const utterance = new SpeechSynthesisUtterance(currentQuestion.question);
+    utterance.lang = 'en-IN';
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    const resumeCandidateSpeech = () => {
+      setIsQuestionSpeaking(false);
+      answerReadyAtRef.current = Date.now();
+      setInterviewState(InterviewState.LISTENING);
+      startListening();
+    };
+    utterance.onend = resumeCandidateSpeech;
+    utterance.onerror = () => {
+      setQuestionError('The interviewer could not finish speaking the question. Please try again.');
+      setIsQuestionSpeaking(false);
+    };
+    window.speechSynthesis.speak(utterance);
+
+    return () => {
+      window.speechSynthesis.cancel();
+      setIsQuestionSpeaking(false);
+    };
+  }, [currentQuestion?.question, interviewState, isPaused, isSessionEnded, resetTranscript, startListening, stopListening]);
+
+  useEffect(() => {
+    const hasAnswer = Boolean(`${transcript} ${interimTranscript}`.trim());
+    if (interviewState !== InterviewState.LISTENING || !hasAnswer || isSubmittingAnswer || answerSubmittedRef.current || isSessionEnded || isPaused || isQuestionSpeaking) {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+      return undefined;
+    }
+
+    silenceTimerRef.current = setTimeout(() => {
+      silenceTimerRef.current = null;
+      if (answerSubmittedRef.current) return;
+      finishAnswer();
+    }, ANSWER_SILENCE_DELAY_MS);
+
+    return () => {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+    };
+  }, [finishAnswer, interimTranscript, interviewState, isPaused, isQuestionSpeaking, isSessionEnded, isSubmittingAnswer, transcript]);
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-[#0b1220] via-[#0f1b2e] to-[#0b1220] text-white p-6">
@@ -226,7 +444,28 @@ export default function InterviewLive() {
         {/* CENTER - Webcam Panel (Larger) */}
         <div className="lg:col-span-8">
           <Panel className="h-full">
-            <WebcamPanel isEnabled={!isPaused && !isSessionEnded} isSessionEnded={isSessionEnded} isPaused={isPaused} isCvConnected={isCvConnected} faceDetected={faceDetected} />
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+              <InterviewerPanel isSpeaking={isQuestionSpeaking} isPaused={isPaused} isSessionEnded={isSessionEnded} />
+              <WebcamPanel isEnabled={!isPaused && !isSessionEnded} isSessionEnded={isSessionEnded} isPaused={isPaused} isCvConnected={isCvConnected} faceDetected={faceDetected} />
+            </div>
+          </Panel>
+
+          <Panel className="mt-6">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <p className="text-xs uppercase tracking-wider text-cyan-400">Resume-grounded question</p>
+                <h2 className="text-lg font-semibold mt-1">{isLoadingQuestion ? 'Preparing your first question...' : currentQuestion?.question || 'Question unavailable'}</h2>
+              </div>
+              {currentQuestion?.difficulty && <span className="text-xs rounded-full border border-slate-700 px-3 py-1 text-slate-300">{currentQuestion.difficulty}</span>}
+            </div>
+            {currentQuestion?.topic && <p className="text-sm text-slate-400 mb-4">Topic: {currentQuestion.topic}{currentQuestion.follow_up ? ' | Follow-up' : ''}</p>}
+            {questionError && <p className="text-sm text-red-400 mb-3">{questionError}</p>}
+            {isSubmittingAnswer && <p className="text-sm text-cyan-300">Analyzing answer...</p>}
+            {isSpeechListening && (
+              <p className="text-sm text-slate-300">
+                {`${transcript} ${interimTranscript}`.trim() || 'Listening for your answer...'}
+              </p>
+            )}
           </Panel>
 
           <Panel className="mt-6">
@@ -234,9 +473,6 @@ export default function InterviewLive() {
             {speechError && (
               <div className="rounded-xl border border-yellow-700 bg-yellow-900/30 px-4 py-3 text-yellow-400 flex items-center justify-between gap-4">
                 <span>{speechError}</span>
-                <button type="button" onClick={startListening} disabled={isSpeechStarting} className="rounded-lg bg-yellow-600 px-3 py-1 text-sm text-white hover:bg-yellow-500 disabled:cursor-wait disabled:opacity-60">
-                  {isSpeechStarting ? 'Starting...' : 'Enable Speech'}
-                </button>
               </div>
             )}
             {whisperError && <FeedbackRow text={whisperError} type="warn" />}
@@ -244,9 +480,6 @@ export default function InterviewLive() {
             {isSpeechSupported && !isSpeechListening && !isSessionEnded && !speechError && (
               <div className="rounded-xl border border-blue-700 bg-blue-900/30 px-4 py-3 text-blue-300 flex items-center justify-between gap-4">
                 <span>Start speech measurement to calculate WPM from your words</span>
-                <button type="button" onClick={startListening} disabled={isSpeechStarting} className="rounded-lg bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-500 disabled:cursor-wait disabled:opacity-60">
-                  {isSpeechStarting ? 'Starting...' : 'Start Speech'}
-                </button>
               </div>
             )}
             {isSpeechSupported && !speechError && !isSpeechListening && !isSessionEnded && (

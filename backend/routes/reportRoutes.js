@@ -4,6 +4,7 @@ const {
   generateReport,
   getReports,
   getReportById,
+  downloadReport,
   deleteReport,
 } = require('../controllers/reportController');
 const authMiddleware = require('../middleware/auth');
@@ -14,6 +15,7 @@ router.use(authMiddleware);
 // Reports
 router.post('/generate/:sessionId', generateReport);
 router.get('/', getReports);
+router.get('/:id/download', downloadReport);
 router.get('/:id', getReportById);
 router.delete('/:id', deleteReport);
 

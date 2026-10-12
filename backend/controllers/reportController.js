@@ -6,6 +6,7 @@ const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const InterviewQuestion = require('../models/InterviewQuestion');
 const { generateInterviewReport, analyzeWithPythonService } = require('../services/reportGenerator');
+const PDFDocument = require('pdfkit');
 
 // @desc    Generate report for a session
 // @route   POST /api/reports/generate/:sessionId
@@ -252,6 +253,46 @@ exports.getReportById = async (req, res) => {
   }
 };
 
+// @desc    Download report as PDF
+// @route   GET /api/reports/:id/download
+// @access  Private
+exports.downloadReport = async (req, res) => {
+  try {
+    const report = await Report.findById(req.params.id).populate('sessionId');
+
+    if (!report) {
+      return res.status(404).json({ success: false, message: 'Report not found' });
+    }
+    if (report.userId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Not authorized to download this report' });
+    }
+
+    const document = new PDFDocument({ margin: 48 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="report-${report._id}.pdf"`);
+    document.pipe(res);
+    document.fontSize(20).text(report.title || 'Interview Report');
+    document.moveDown();
+    document.fontSize(12).text(`Overall score: ${Math.round(report.overallScore || 0)}/100`);
+    document.text(`Confidence: ${Math.round(report.confidenceScore || 0)}%`);
+    document.text(`Communication: ${Math.round(report.communicationScore || 0)}%`);
+    document.text(`Content quality: ${Math.round(report.contentQualityScore || 0)}%`);
+    document.moveDown();
+    document.fontSize(14).text('Summary');
+    document.fontSize(11).text(report.executiveSummary || 'No summary available.');
+    document.moveDown();
+    document.fontSize(14).text('Strengths');
+    (report.strengths || []).forEach((strength) => document.fontSize(11).text(`- ${strength}`));
+    document.moveDown();
+    document.fontSize(14).text('Areas to Improve');
+    (report.areasForImprovement || []).forEach((area) => document.fontSize(11).text(`- ${area}`));
+    document.end();
+  } catch (error) {
+    console.error('Download Report Error:', error);
+    res.status(500).json({ success: false, message: 'Error downloading report' });
+  }
+};
+
 // @desc    Delete report
 // @route   DELETE /api/reports/:id
 // @access  Private
@@ -336,6 +377,10 @@ function buildSessionAudit(speechMetrics, confidenceMetrics) {
   const seenCompletionSnapshots = new Set();
   [...speechInsights, ...confidenceInsights].forEach((insight) => {
     if (!insight.feedback) return;
+    const rawMetricText = String(insight.feedback).trim();
+    if (/^confidence\s+\d+\s*,?\s*eye contact\s+\d+\s*,?\s*posture\s+\d+/i.test(rawMetricText) || /persisted confidence snapshot:/i.test(rawMetricText)) {
+      return;
+    }
     const category = insight.metric?.startsWith('confidence') ? 'confidence' : 'speech';
     const completionKey = `${insight.metric}:${insight.value}:${insight.feedback}`;
     if (insight.metric === 'session-completion') {
@@ -368,10 +413,27 @@ function buildSessionAudit(speechMetrics, confidenceMetrics) {
   };
 }
 
+function isRawMetricSnapshot(text) {
+  return /confidence\s+\d+.*eye contact\s+\d+.*posture\s+\d+/i.test(text)
+    || /^confidence\s+\d+/i.test(text)
+    || /persisted confidence snapshot:/i.test(text);
+}
+
+function humanizeMetricSnapshot(text) {
+  const match = text.match(/confidence\s+(\d+)\s*,?\s*eye contact\s+(\d+)\s*,?\s*posture\s+(\d+)/i);
+  if (!match) return text;
+
+  const [, confidence, eyeContact, posture] = match;
+  return `You showed a little more hesitation in a few moments, with confidence at ${confidence}%, eye contact at ${eyeContact}%, and posture at ${posture}%. Try to keep your gaze and posture steady throughout the full answer so you sound more calm and grounded.`;
+}
+
 function deduplicateFindings(items) {
   const selected = new Map();
   items.filter(Boolean).forEach((item) => {
-    const text = String(item).trim();
+    let text = String(item).trim();
+    if (isRawMetricSnapshot(text)) {
+      text = humanizeMetricSnapshot(text);
+    }
     const normalized = text.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ');
     const category = normalized.includes('eye contact') ? 'eye-contact'
       : normalized.includes('speech') || normalized.includes('clarity') ? 'speech-clarity'
@@ -388,14 +450,27 @@ function deduplicateFindings(items) {
 
 function generateAreasForImprovement(speechMetrics, confidenceMetrics) {
   const areas = [];
-  
-  if (speechMetrics?.clarity < 70) areas.push('Improve speech clarity');
-  if (speechMetrics?.fillers > 10) areas.push('Reduce filler words');
-  if (confidenceMetrics?.nervousness > 50) areas.push('Work on managing nervousness');
-  if (confidenceMetrics?.gestures < 60) areas.push('Use more purposeful gestures');
-  if (speechMetrics?.pace < 100 || speechMetrics?.pace > 180) areas.push('Adjust speaking pace');
 
-  return areas.length > 0 ? areas : ['Continue practicing'];
+  if (confidenceMetrics?.nervousness > 50) {
+    areas.push('You seemed a little tense at times. Take a quick breath before answering and slow your opening sentence to sound more calm and confident.');
+  }
+  if (confidenceMetrics?.gestures < 60) {
+    areas.push('Your gestures were a bit limited. Add a few deliberate hand movements to emphasize your key points and sound more natural.');
+  }
+  if (speechMetrics?.pace < 100 || speechMetrics?.pace > 180) {
+    areas.push('Your speaking pace was uneven. Try to speak a little more steadily and pause briefly after important points.');
+  }
+  if ((confidenceMetrics?.eyeContact ?? 0) < 80 || (confidenceMetrics?.posture ?? 0) < 80) {
+    areas.push('Keep your eye contact and posture steadier throughout the answer so you come across as more grounded and confident.');
+  }
+  if (speechMetrics?.clarity < 70) {
+    areas.push('Make your points simpler and clearer so the interviewer can follow your answer more easily.');
+  }
+  if (speechMetrics?.fillers > 10) {
+    areas.push('Try to cut down filler words by pausing for a beat before answering complex questions.');
+  }
+
+  return areas.length > 0 ? areas : ['Keep building momentum with steady eye contact, a calm pace, and clear examples.'];
 }
 
 function generateRecommendations(speechMetrics, confidenceMetrics) {
@@ -412,7 +487,7 @@ function generateRecommendations(speechMetrics, confidenceMetrics) {
   if (confidenceMetrics?.nervousness > 50) {
     recommendations.push({
       category: 'Confidence',
-      suggestion: 'Practice relaxation techniques before interviews',
+      suggestion: 'Before each answer, take one slow breath and start a little more calmly so your nerves do not take over the first sentence.',
       priority: 'high',
     });
   }
@@ -420,7 +495,7 @@ function generateRecommendations(speechMetrics, confidenceMetrics) {
   if (speechMetrics?.fillers > 10) {
     recommendations.push({
       category: 'Speech',
-      suggestion: 'Record yourself and listen for filler words',
+      suggestion: 'Pause for one beat before answering. That small pause makes you sound more thoughtful and cuts down filler words.',
       priority: 'medium',
     });
   }

@@ -10,6 +10,8 @@ export default function InterviewSetup() {
   const navigate = useNavigate();
   const [allReady, setAllReady] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
+  const [resumeFile, setResumeFile] = useState(null);
+  const [startError, setStartError] = useState('');
 
   const requirements = [
     { icon: Video, label: 'Webcam Access', status: 'ready' },
@@ -75,6 +77,17 @@ export default function InterviewSetup() {
             transition={{ delay: 0.3 }}
           >
             <motion.div variants={itemVariants}>
+              <label htmlFor="interview-resume" className="block text-sm text-slate-400 mb-2">Upload your resume</label>
+              <input
+                id="interview-resume"
+                type="file"
+                accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                onChange={(event) => setResumeFile(event.target.files?.[0] || null)}
+                className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-cyan-600 file:px-3 file:py-2 file:text-white"
+              />
+              {!resumeFile && <p className="text-xs text-amber-400 mt-2">A resume is required so every question stays relevant to your experience.</p>}
+            </motion.div>
+            <motion.div variants={itemVariants}>
               <label className="block text-sm text-slate-400 mb-2">Interview Type</label>
               <select className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500">
                 <option>Technical Interview</option>
@@ -86,36 +99,41 @@ export default function InterviewSetup() {
             <motion.div variants={itemVariants}>
               <label className="block text-sm text-slate-400 mb-2">Duration</label>
               <select className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500">
+                <option>5 minutes</option>
+                <option>10 minutes</option>
                 <option>15 minutes</option>
-                <option>30 minutes</option>
-                <option>45 minutes</option>
-                <option>60 minutes</option>
               </select>
             </motion.div>
 
             <motion.button
               variants={itemVariants}
               onClick={async () => {
+                if (!resumeFile) return;
                 setIsStarting(true);
+                setStartError('');
                 try {
                   const response = await sessionAPI.createSession({
                     title: 'Live Interview',
                     category: 'technical',
                     difficulty: 'medium',
+                    cv: resumeFile,
                   });
                   const sessionId = response.data?.data?._id;
                   if (sessionId) {
-                    await sessionAPI.startSession(sessionId);
+                    const activeSessionId = String(sessionId);
+                    sessionStorage.setItem('currentInterviewSessionId', activeSessionId);
+                    localStorage.setItem('currentInterviewSessionId', activeSessionId);
+                    await sessionAPI.startSession(activeSessionId);
                   }
-                  navigate('/interview-live', { state: { sessionId } });
+                  navigate(`/interview-live?sessionId=${encodeURIComponent(sessionId || '')}`, { state: { sessionId } });
                 } catch (error) {
                   console.error('[Session] Could not create backend session:', error);
-                  navigate('/interview-live');
+                  setStartError(error.response?.data?.message || 'Could not create the interview session.');
                 } finally {
                   setIsStarting(false);
                 }
               }}
-              disabled={isStarting}
+              disabled={isStarting || !resumeFile}
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 px-6 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition mt-6"
@@ -123,6 +141,7 @@ export default function InterviewSetup() {
               <Play size={20} />
               {isStarting ? 'Starting...' : 'Start Interview'}
             </motion.button>
+            {startError && <p className="text-sm text-red-400" role="alert">{startError}</p>}
           </motion.div>
         </Panel>
       </motion.div>

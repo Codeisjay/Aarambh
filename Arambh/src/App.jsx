@@ -30,6 +30,7 @@ import AnalysisPlayback from './pages/AnalysisPlayback';
 // Reports Pages
 import ReportsList from './pages/ReportsList';
 import ReportView from './pages/ReportView';
+import ResumeParserTest from './pages/ResumeParserTest';
 
 // Admin Pages
 import AdminDashboard from './pages/AdminDashboard';
@@ -72,6 +73,7 @@ export default function App() {
           {/* Reports Routes */}
           <Route path="/reports" element={<ReportsList />} />
           <Route path="/report-view/:id" element={<ReportView />} />
+          <Route path="/resume-parser-test" element={<ResumeParserTest />} />
 
           {/* Admin Routes */}
           <Route path="/admin" element={<AdminDashboard />} />

@@ -14,6 +14,22 @@ export default function ReportView() {
   const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
 
+  const downloadReport = async () => {
+    try {
+      const response = await reportAPI.downloadReport(id);
+      const url = window.URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `report-${id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Could not download this report');
+    }
+  };
+
   useEffect(() => {
     reportAPI.getReportById(id)
       .then((response) => setReport(response.data.data))
@@ -265,6 +281,7 @@ export default function ReportView() {
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
+          onClick={downloadReport}
           className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 px-6 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition"
         >
           <Download size={18} />

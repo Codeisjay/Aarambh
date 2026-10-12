@@ -174,7 +174,7 @@ exports.updateConfidenceMetrics = async (req, res) => {
     const timestamp = Date.now();
     const confidenceFeedback = metrics.recommendations?.length
       ? metrics.recommendations.join(' ')
-      : `Confidence ${metrics.overallConfidenceScore ?? 0}, eye contact ${metrics.eyeContact ?? 0}, posture ${metrics.posture ?? 0}`;
+      : 'Confidence needs a steadier posture and more consistent eye contact during the answer.';
     const observation = {
       timestamp,
       metric: 'confidence-snapshot',

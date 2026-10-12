@@ -1,5 +1,5 @@
 // Sidebar.jsx
-import { Home, Briefcase, BarChart3, Settings, LogOut, Users } from 'lucide-react';
+import { Home, Briefcase, BarChart3, Settings, LogOut, Users, FileSearch } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export default function Sidebar() {
@@ -9,6 +9,7 @@ export default function Sidebar() {
     { label: 'Reports', icon: BarChart3, href: '/reports' },
     { label: 'Admin', icon: Users, href: '/admin' },
     { label: 'Settings', icon: Settings, href: '/settings' },
+    { label: 'Resume Parser Test', icon: FileSearch, href: '/resume-parser-test' },
   ];
 
   return (

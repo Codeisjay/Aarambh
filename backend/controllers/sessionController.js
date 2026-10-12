@@ -4,19 +4,77 @@ const ConfidenceMetrics = require('../models/ConfidenceMetrics');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 
+async function parseResumeWithAiService(file) {
+  const form = new FormData();
+  form.append('resume', new Blob([file.buffer], { type: file.mimetype }), file.originalname);
+
+  const response = await fetch(`${process.env.AI_SERVICE_URL || 'http://127.0.0.1:5100'}/api/parse-resume`, {
+    method: 'POST',
+    body: form,
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.message || 'Resume parser rejected the file');
+  }
+  return payload.data;
+}
+
+async function getNextInterviewQuestion(resumeProfile, history, answer, difficulty) {
+  const response = await fetch(`${process.env.AI_SERVICE_URL || 'http://127.0.0.1:5100'}/api/interview/next`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resume_profile: resumeProfile,
+      history,
+      answer,
+      difficulty,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.message || 'Interview agent rejected the request');
+  }
+  return payload.data;
+}
+
 // @desc    Create a new interview session
 // @route   POST /api/sessions
 // @access  Private
 exports.createSession = async (req, res) => {
   try {
-    const { title, description, category, difficulty, questionIds = [] } = req.body;
+    const { title, description, category, difficulty, questionIds = [] } = req.body || {};
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload your CV before starting the interview',
+      });
+    }
+
+    let resumeProfile;
+    try {
+      resumeProfile = await parseResumeWithAiService(req.file);
+    } catch (error) {
+      console.error('Resume Parse Error:', error);
+      return res.status(503).json({
+        success: false,
+        message: 'Resume parsing is unavailable. Please start the AI service and try again.',
+      });
+    }
 
     const session = await Session.create({
       userId: req.user.id,
-      title,
+      title: title || 'Live Interview',
       description,
       category,
       difficulty,
+      cv: {
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        size: req.file.size,
+        data: req.file.buffer,
+      },
+      resumeProfile,
       status: 'setup',
     });
 
@@ -33,10 +91,13 @@ exports.createSession = async (req, res) => {
       userAgent: req.get('user-agent'),
     });
 
+    const sessionResponse = session.toObject();
+    delete sessionResponse.cv?.data;
+
     res.status(201).json({
       success: true,
       message: 'Session created successfully',
-      data: session,
+      data: sessionResponse,
     });
   } catch (error) {
     console.error('Create Session Error:', error);
@@ -120,6 +181,86 @@ exports.getSessionById = async (req, res) => {
       success: false,
       message: 'Error fetching session',
     });
+  }
+};
+
+// @desc    Generate the next resume-grounded interview question
+// @route   POST /api/sessions/:id/interview/next
+// @access  Private
+exports.getNextInterviewQuestion = async (req, res) => {
+  try {
+    const session = await Session.findById(req.params.id);
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+    if (session.userId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Not authorized to access this session' });
+    }
+    if (!session.resumeProfile) {
+      return res.status(400).json({ success: false, message: 'A parsed resume is required before interviewing' });
+    }
+
+    const answer = String(req.body?.answer || '').trim();
+    const lastQuestion = session.questions?.[session.questions.length - 1];
+    const history = (session.interviewHistory || []).map((item) => item.toObject ? item.toObject() : item);
+
+    if (answer && lastQuestion && !lastQuestion.candidateAnswer) {
+      const analysis = req.body?.analysis || {};
+      lastQuestion.candidateAnswer = answer;
+      lastQuestion.extractedTopics = analysis.detected_topics || [];
+      lastQuestion.confidence = analysis.confidence_level || '';
+      lastQuestion.depthScore = Number(analysis.quality_score) || 0;
+      lastQuestion.answeredCorrectly = Number(analysis.quality_score) >= 65;
+      history.push({
+        askedQuestion: lastQuestion.text,
+        candidateAnswer: answer,
+        extractedTopics: lastQuestion.extractedTopics,
+        confidence: lastQuestion.confidence,
+        depthScore: lastQuestion.depthScore,
+        answeredCorrectly: lastQuestion.answeredCorrectly,
+        topic: lastQuestion.topic,
+        difficulty: lastQuestion.difficulty,
+        expectedConcepts: lastQuestion.expectedConcepts || [],
+        followUp: lastQuestion.followUp || false,
+      });
+    }
+
+    const agentResult = await getNextInterviewQuestion(
+      session.resumeProfile,
+      history,
+      answer,
+      session.difficulty || 'medium',
+    );
+
+    if (agentResult.analysis && lastQuestion && answer) {
+      lastQuestion.extractedTopics = agentResult.analysis.detected_topics || lastQuestion.extractedTopics || [];
+      lastQuestion.confidence = agentResult.analysis.confidence_level || lastQuestion.confidence;
+      lastQuestion.depthScore = Number(agentResult.analysis.quality_score) || lastQuestion.depthScore || 0;
+      lastQuestion.answeredCorrectly = lastQuestion.depthScore >= 65;
+      const currentHistory = history[history.length - 1];
+      if (currentHistory) {
+        currentHistory.extractedTopics = lastQuestion.extractedTopics;
+        currentHistory.confidence = lastQuestion.confidence;
+        currentHistory.depthScore = lastQuestion.depthScore;
+        currentHistory.answeredCorrectly = lastQuestion.answeredCorrectly;
+      }
+    }
+
+    session.questions.push({
+      text: agentResult.question,
+      topic: agentResult.topic,
+      difficulty: agentResult.difficulty,
+      expectedConcepts: agentResult.expected_concepts,
+      followUp: agentResult.follow_up,
+      askedAt: new Date(),
+    });
+    session.interviewHistory = history;
+    await session.save();
+
+    res.status(200).json({ success: true, data: agentResult });
+  } catch (error) {
+    console.error('Next Interview Question Error:', error);
+    res.status(503).json({ success: false, message: 'Interview agent is unavailable' });
   }
 };
 

@@ -1,15 +1,43 @@
 // AdminDashboard.jsx
 import { Users, BookOpen, BarChart3, TrendingUp } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
 import Panel from '../components/Panel';
-import MetricBox from '../components/MetricBox';
+import { adminAPI } from '../services/endpoints';
 
 export default function AdminDashboard() {
+  const [statistics, setStatistics] = useState({
+    totalUsers: 0,
+    totalSessions: 0,
+    averageUserScore: 0,
+    activeUsers: 0,
+  });
+  const [recentSessions, setRecentSessions] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const loadDashboard = async () => {
+      try {
+        const response = await adminAPI.getDashboard();
+        const dashboard = response.data?.data;
+        setStatistics(dashboard?.statistics || {});
+        setRecentSessions(dashboard?.recentSessions || []);
+      } catch (requestError) {
+        setError(requestError.response?.data?.message || 'Unable to load dashboard data');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadDashboard();
+  }, []);
+
   const stats = [
-    { icon: Users, label: 'Total Users', value: '1,234', color: 'text-cyan-400' },
-    { icon: BookOpen, label: 'Total Sessions', value: '5,678', color: 'text-green-400' },
-    { icon: BarChart3, label: 'Avg Score', value: '78.5', color: 'text-yellow-400' },
-    { icon: TrendingUp, label: 'Active Now', value: '42', color: 'text-blue-400' },
+    { icon: Users, label: 'Total Users', value: statistics.totalUsers, color: 'text-cyan-400' },
+    { icon: BookOpen, label: 'Total Sessions', value: statistics.totalSessions, color: 'text-green-400' },
+    { icon: BarChart3, label: 'Avg Score', value: Number(statistics.averageUserScore || 0).toFixed(1), color: 'text-yellow-400' },
+    { icon: TrendingUp, label: 'Active Users', value: statistics.activeUsers, color: 'text-blue-400' },
   ];
 
   const containerVariants = {
@@ -42,6 +70,7 @@ export default function AdminDashboard() {
       </motion.h1>
 
       {/* KPI Cards */}
+      {error && <p className="mb-6 text-red-400">{error}</p>}
       <motion.div
         className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6"
         variants={containerVariants}
@@ -63,7 +92,7 @@ export default function AdminDashboard() {
                     animate={{ opacity: 1 }}
                     transition={{ delay: 0.2 + i * 0.1 }}
                   >
-                    {stat.value}
+                    {isLoading ? '...' : stat.value}
                   </motion.p>
                 </div>
                 <motion.div
@@ -127,9 +156,12 @@ export default function AdminDashboard() {
             initial="hidden"
             animate="visible"
           >
-            {['3 new users registered', '12 interviews completed', '5 bug reports submitted', 'System maintenance completed'].map((activity, idx) => (
-              <motion.p key={idx} variants={itemVariants}>
-                • {activity}
+            {!isLoading && recentSessions.length === 0 && (
+              <motion.p variants={itemVariants}>No sessions found.</motion.p>
+            )}
+            {recentSessions.map((session) => (
+              <motion.p key={session._id} variants={itemVariants}>
+                • {session.title || session.interviewType || 'Interview session'} ({session.status || 'unknown'})
               </motion.p>
             ))}
           </motion.div>

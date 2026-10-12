@@ -8,7 +8,7 @@ import { useReport } from '../hooks/useReport';
 
 export default function ReportsList() {
   const navigate = useNavigate();
-  const { reports, loading, error, fetchReports, deleteReport } = useReport();
+  const { reports, loading, error, fetchReports, downloadReport, deleteReport } = useReport();
 
   useEffect(() => {
     fetchReports().catch(() => {});
@@ -83,6 +83,8 @@ export default function ReportsList() {
                   <motion.button
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.95 }}
+                    onClick={() => downloadReport(report._id)}
+                    aria-label="Download PDF"
                     className="bg-green-600 hover:bg-green-700 p-2 rounded-lg transition"
                   >
                     <Download size={18} />

@@ -53,6 +53,23 @@ export function useReport() {
     }
   };
 
+  const downloadReport = async (reportId) => {
+    try {
+      const response = await reportAPI.downloadReport(reportId);
+      const url = window.URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `report-${reportId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to download report');
+      throw err;
+    }
+  };
+
   // Delete report
   const deleteReport = async (reportId) => {
     try {
@@ -75,6 +92,7 @@ export function useReport() {
     generateReport,
     fetchReports,
     getReport,
+    downloadReport,
     deleteReport,
   };
 }
